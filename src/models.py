@@ -20,7 +20,7 @@ from torch_geometric.nn import GATConv, SAGEConv
 
 from performer_pytorch import Performer
 
-from feature_maps.fourier_features import GeneralizedRandomFeatures
+# from feature_maps.fourier_features import GeneralizedRandomFeatures
 
 
 import math
