@@ -38,10 +38,13 @@ def data_gen_e_aug(train_loader, slices, batch_size = 4, step = 1):
         last_ind_v = torch.arange(data.ptr[-1])
         last_ind_max = data.ptr[-1].item()        
         ei_dict = defaultdict(set)
+        base_edges = set()
         for e in data.edge_index[:, visited_e].T:
             e = e.to(dtype=torch.long)
             ei_dict[e[0].item()].add(e[1].item()) 
             ei_dict[e[1].item()].add(e[0].item()) 
+            base_edges.add(e[0].item())
+            base_edges.add(e[1].item())
         
         for i in range(data.edge_index.shape[1]): # max number of iterations, usually we stop earlier
             if torch.all(visited_e):
@@ -71,10 +74,13 @@ def data_gen_e_aug(train_loader, slices, batch_size = 4, step = 1):
             visited_e[e1_ind] = True  
             visited_v[edges_1.view(-1)] = True
         
-        edge_index = []
+        edge_index, e1 = []
         for k,v in ei_dict.items():
             e = torch.tensor(list(v)).view(1,-1)
             edge_index.append(torch.cat((e, torch.full_like(e, k)), dim=0))
+            if k not in base_edges:
+                e1.append(torch.cat((e, torch.full_like(e, k)), dim=0))
+
         vert_index = torch.cat((torch.arange(data.ptr[-1]),torch.Tensor(vert_ind))).to(dtype=torch.long)
 
         yield  data.x[vert_index],\
