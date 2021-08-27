@@ -1,9 +1,30 @@
 import torch
+import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch_geometric.nn import GCNConv
 
 import math
+
+
+def positional_encoding(position, d_model):
+    def get_angles(pos, i, d_model):
+        angle_rates = 1 / torch.pow(10000, (2 * (i//2)) / d_model)
+        return pos * angle_rates
+
+    angle_rads = get_angles(torch.arange(position).unsqueeze(1),
+                            torch.arange(d_model).unsqueeze(0),
+                            d_model)
+
+    # apply sin to even indices in the array; 2i
+    angle_rads[:, 0::2] = torch.sin(angle_rads[:, 0::2])
+
+    # apply cos to odd indices in the array; 2i+1
+    angle_rads[:, 1::2] = torch.cos(angle_rads[:, 1::2])
+      
+    pos_encoding = angle_rads.unsqueeze(0)
+
+    return pos_encoding
 
 
 class CausalSelfAttention(nn.Module):
@@ -13,8 +34,7 @@ class CausalSelfAttention(nn.Module):
     explicit implementation here to show that there is nothing too scary here.
     """
 
-    def __init__(self, block_size,
-                       hidden_dim,
+    def __init__(self, hidden_dim,
                        num_heads,
                        attn_pdrop,
                        resid_pdrop):
@@ -33,16 +53,12 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.proj = nn.Linear(hidden_dim, hidden_dim)
 
-        # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer(
-            "mask",
-            torch.tril(torch.ones(block_size, block_size))
-                .view(1, 1, block_size, block_size)
-        )
         self.n_head = num_heads
 
     def forward(self, x, layer_past=None):
         B, T, C = x.size()
+
+        mask = torch.tril(torch.ones(T, T)).view(1, 1, T, T)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         k = self.key(x).view(
@@ -54,7 +70,7 @@ class CausalSelfAttention(nn.Module):
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))
+        att = att.masked_fill(mask[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -68,8 +84,7 @@ class CausalSelfAttention(nn.Module):
 class Block(nn.Module):
     """ an unassuming Transformer block """
 
-    def __init__(self, block_size,
-                       hidden_dim,
+    def __init__(self, hidden_dim,
                        num_heads,
                        attn_pdrop,
                        resid_pdrop):
@@ -78,7 +93,6 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(hidden_dim)
         self.ln2 = nn.LayerNorm(hidden_dim)
         self.attn = CausalSelfAttention(
-            block_size=block_size,
             hidden_dim=hidden_dim,
             num_heads=num_heads,
             attn_pdrop=attn_pdrop,
@@ -99,8 +113,7 @@ class Block(nn.Module):
 
 class GPT(nn.Module):
 
-    def __init__(self, block_size,
-                       hidden_dim,
+    def __init__(self, hidden_dim,
                        num_layers,
                        num_heads,
                        attn_pdrop,
@@ -109,15 +122,10 @@ class GPT(nn.Module):
 
         super().__init__()
 
-        # input embedding stem
-        self.pos_emb = nn.Parameter(
-            torch.zeros(1, block_size, hidden_dim)
-        )
         self.drop = nn.Dropout(embd_pdrop)
         # transformer
         self.blocks = nn.Sequential(
             *[Block(
-                block_size=block_size,
                 hidden_dim=hidden_dim,
                 num_heads=num_heads,
                 attn_pdrop=attn_pdrop,
@@ -128,7 +136,6 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(hidden_dim)
         self.head = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
-        self.block_size = block_size
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -141,11 +148,12 @@ class GPT(nn.Module):
             module.weight.data.fill_(1.0)
 
     def forward(self, x):
-        _, t, _ = x.size()
-        assert t <= self.block_size, "Cannot forward, model block size is exhausted."
+        _, t, d = x.size()
+        assert t >= 0, "Cannot forward, model block size is exhausted."
+
+        position_embeddings = positional_encoding(t, d)
 
         # forward the GPT model
-        position_embeddings = self.pos_emb[:, :t, :]
         x = self.drop(x + position_embeddings)
         x = self.blocks(x)
         x = self.ln_f(x)
