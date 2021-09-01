@@ -158,8 +158,9 @@ class GPT(nn.Module):
         x = self.blocks(x)
         x = self.ln_f(x)
         out = self.head(x)
-
         return out
+
+
 
 
 
